@@ -15,27 +15,29 @@
  * =============================================================================
  */
 
-import {ArrayOps} from './array_ops';
-import {BatchNormOps} from './batchnorm';
-import {BinaryOps} from './binary_ops';
-import {CompareOps} from './compare';
-import {ConcatOps} from './concat';
-import {ConvOps} from './conv';
-import {ImageOps} from './image_ops';
-import {LogicalOps} from './logical_ops';
-import {LossOps, Reduction} from './loss_ops';
-import {LRNOps} from './lrn';
-import {LSTMOps} from './lstm';
-import {MatmulOps} from './matmul';
-import {MovingAverageOps} from './moving_average';
-import {NormOps} from './norm';
-import {PoolOps} from './pool';
-import {ReductionOps} from './reduction_ops';
-import {ReverseOps} from './reverse';
-import {SliceOps} from './slice';
-import {SoftmaxOps} from './softmax';
-import {TransposeOps} from './transpose';
-import {UnaryOps} from './unary_ops';
+import { ArrayOps } from './array_ops';
+import { BatchNormOps } from './batchnorm';
+import { BinaryOps } from './binary_ops';
+import { CompareOps } from './compare';
+import { ConcatOps } from './concat';
+import { ConvOps } from './conv';
+import { ImageOps } from './image_ops';
+import { LogicalOps } from './logical_ops';
+import { LossOps, Reduction } from './loss_ops';
+import { LRNOps } from './lrn';
+import { LSTMOps } from './lstm';
+import { MatmulOps } from './matmul';
+import { MovingAverageOps } from './moving_average';
+import { NormOps } from './norm';
+import { PoolOps } from './pool';
+import { ReductionOps } from './reduction_ops';
+import { ReverseOps } from './reverse';
+import { SliceOps } from './slice';
+import { SoftmaxOps } from './softmax';
+import { TransposeOps } from './transpose';
+import { UnaryOps } from './unary_ops';
+
+export * from './conv_util';
 
 export const batchNormalization = BatchNormOps.batchNormalization;
 export const batchNormalization2d = BatchNormOps.batchNormalization2d;
@@ -213,8 +215,8 @@ export const softmax = SoftmaxOps.softmax;
 export const localResponseNormalization = LRNOps.localResponseNormalization;
 
 // So typings can propagate.
-import {Tensor} from '../tensor';
-import {Rank} from '../types';
+import { Tensor } from '../tensor';
+import { Rank } from '../types';
 // tslint:disable-next-line:no-unused-expression
 [Tensor, Rank];
 

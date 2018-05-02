@@ -38,6 +38,7 @@ import {SoftmaxOps} from './softmax';
 import {StridedSliceOps} from './strided_slice';
 import {TransposeOps} from './transpose';
 import {UnaryOps} from './unary_ops';
+export * from './conv_util';
 
 export const batchNormalization = BatchNormOps.batchNormalization;
 export const batchNormalization2d = BatchNormOps.batchNormalization2d;

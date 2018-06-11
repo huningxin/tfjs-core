@@ -20,6 +20,7 @@
 // that doesn't count since it's exporting a Typescript interface.
 import './kernels/backend_webgl';
 import './kernels/backend_cpu';
+import './kernels/backend_webml';
 
 import {BrowserUtil} from './browser_util';
 import * as environment from './environment';

@@ -216,7 +216,7 @@ export class MathBackendWebML implements KernelBackend {
 
   sum(x: Tensor, axes: number[]): Tensor {
     const y = Tensor.make(x.shape, {}, x.dtype) as Tensor;
-    console.log(`op: sum, inputs: [${x.id}], outputs: [${y.id}], attrs: {${axes}}`)
+    console.log(`op: sum, inputs: [${x.id}], outputs: [${y.id}], axes: [${axes}]`)
     return y;
   }
 
@@ -295,7 +295,7 @@ export class MathBackendWebML implements KernelBackend {
 
   max(x: Tensor, axes: number[]): Tensor {
     const y = Tensor.make(x.shape, {}, x.dtype) as Tensor;
-    console.log(`op: max, inputs: [${x.id}], outputs: [${y.id}], attrs: {${axes}}`)
+    console.log(`op: max, inputs: [${x.id}], outputs: [${y.id}], axes: [${axes}]`)
     return y;
   }
 
@@ -377,7 +377,7 @@ export class MathBackendWebML implements KernelBackend {
 
   clip<T extends Tensor>(x: T, min: number, max: number): T {
     let y = Tensor.make(x.shape, {}, x.dtype) as T;
-    console.log(`op: clip, inputs: [${x.id}], outputs: [${y.id}], attrs: {min: ${min}, max: ${max}}`);
+    console.log(`op: clip, inputs: [${x.id}], outputs: [${y.id}], min: ${min}, max: ${max}`);
     return y;
   }
 
@@ -458,14 +458,8 @@ export class MathBackendWebML implements KernelBackend {
   }
 
   conv2d(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
-    const filterHeight = convInfo.filterHeight;
-    const filterWidth = convInfo.filterWidth;
-    //const dilationHeight = convInfo.dilationHeight;
-    //const dilationWidth = convInfo.dilationWidth;
-    const padLeft = convInfo.padInfo.left;
-    const padTop = convInfo.padInfo.top;
     const y = Tensor.make(convInfo.outShape, {}, x.dtype) as Tensor4D;
-    console.log(`op: conv2d, inputs: [${x.id}, ${filter.id}], outputs: [${y.id}], attrs: {filterHeight: ${filterHeight}, filterWidth: ${filterWidth}, padLeft: ${padLeft}, padTop: ${padTop}}`);
+    console.log(`op: conv2d, inputs: [${x.id}, ${filter.id}], outputs: [${y.id}], convInfo: ${JSON.stringify(convInfo)}`);
     return y;
   }
 
@@ -480,15 +474,8 @@ export class MathBackendWebML implements KernelBackend {
 
   depthwiseConv2D(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
       Tensor4D {
-    const filterHeight = convInfo.filterHeight;
-    const filterWidth = convInfo.filterWidth;
-    // const dilationHeight = convInfo.dilationHeight;
-    // const dilationWidth = convInfo.dilationWidth;
-    const padLeft = convInfo.padInfo.left;
-    const padTop = convInfo.padInfo.top;
-    const chMul = convInfo.outChannels / convInfo.inChannels;
     const y = Tensor.make(convInfo.outShape, {}, x.dtype) as Tensor4D;
-    console.log(`op: depthwiseConv2D, inputs: [${x.id}, ${filter.id}], outputs: [${y.id}], attrs: {filterHeight: ${filterHeight}, filterWidth: ${filterWidth}, padLeft: ${padLeft}, padTop: ${padTop}, chMul: ${chMul}}`);
+    console.log(`op: depthwiseConv2D, inputs: [${x.id}, ${filter.id}], outputs: [${y.id}], convInfo: ${JSON.stringify(convInfo)}`);
     return y;
   }
 
@@ -511,14 +498,8 @@ export class MathBackendWebML implements KernelBackend {
 
   private pool(x: Tensor4D, convInfo: Conv2DInfo, poolType: 'max'|'avg'):
       Tensor4D {
-    const strideHeight = convInfo.strideHeight;
-    const strideWidth = convInfo.strideWidth;
-    const filterHeight = convInfo.filterHeight;
-    const filterWidth = convInfo.filterWidth;
-    const padTop = convInfo.padInfo.top;
-    const padLeft = convInfo.padInfo.left;
     const y = Tensor.make(convInfo.outShape, {}, x.dtype) as Tensor4D;
-    console.log(`op: ${poolType}pool, inputs: [${x.id}], ouputs: [${y.id}] attrs: {strideHeight: ${strideHeight}, strideWidth: ${strideWidth}, filterHeight: ${filterHeight}, filterWidth: ${filterWidth}, padTop: ${padTop}, padLeft: ${padLeft}}`);
+    console.log(`op: ${poolType}pool, inputs: [${x.id}], ouputs: [${y.id}], convInfo: ${JSON.stringify(convInfo)}`);
     return y;
   }
 

@@ -142,8 +142,10 @@ export class MathBackendWebML implements KernelBackend {
   }
   async read(dataId: DataId): Promise<TypedArray> {
     await this.compileGraph();
+    const data = this.readSync(dataId);
     await this.executeGraph();
-    return this.readSync(dataId);
+    console.log(data);
+    return data;
   }
   readSync(dataId: DataId): TypedArray {
     console.log(`readSync ${dataId}`);
@@ -170,14 +172,6 @@ export class MathBackendWebML implements KernelBackend {
     this.model.setOperandValue(operandIndex, new Float32Array([value]));
   }
 
-  async executeGraph() {
-    if (!this.graphCompiled) {
-      console.log('no compiled graph')
-      return;
-    }
-    console.log('execute graph');
-  }
-
   async compileGraph() {
     // reset the op tracing.
     this.opIndex = 0;
@@ -187,7 +181,7 @@ export class MathBackendWebML implements KernelBackend {
       return;
     }
     console.log('compile graph starts');
-    this.model = await this.nn.createModel({ useWebGL2: true });
+    this.model = await this.nn.createModel({ useWebGL2: false });
     let operands = new WeakMap<DataId, number>();
     let graphInputs = new Set<number>();
     let graphOutputs = new Set<number>();
@@ -259,10 +253,26 @@ export class MathBackendWebML implements KernelBackend {
           const weights = op.inputs[1];
           const weightsIndex = operandIndex++;
           const weightsInfo = this.dataInfo.get(weights);
-          console.log(`add operand id: ${weightsIndex}, shape: [${weightsInfo.shape}], dtype: ${weightsInfo.dtype}`);
-          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: weightsInfo.shape });
+          const weightsData = this.data.get(weights);
+          // hack on weigths shape from [h, w, in, out] to [out, h, w, in]
+          const [height, width, inChannel, outChannel] = weightsInfo.shape;
+          const length = inChannel * height * width * outChannel;
+          const transposedWeights = new Float32Array(length);
+          for (let h = 0; h < height; ++h) {
+            for (let w = 0; w < width; ++w) {
+              for (let i = 0; i < inChannel; ++i) {
+                for (let o = 0; o < outChannel; ++o) {
+                  transposedWeights[o * height * width * inChannel + h * width * inChannel + w * inChannel + i] =
+                    weightsData[h * width * inChannel * outChannel + w * inChannel * outChannel + i * outChannel + o];
+                }
+              }
+            }
+          }
+          const transposedShape = [outChannel, height, width, inChannel];
+          console.log(`add operand id: ${weightsIndex}, shape: [${transposedShape}], dtype: ${weightsInfo.dtype}`);
+          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: transposedShape });
           console.log(`set operand value id: ${weightsIndex}, value length: ${this.data.get(weights).length}`);
-          this.model.setOperandValue(weightsIndex, this.data.get(weights));
+          this.model.setOperandValue(weightsIndex, transposedWeights);
           inputs.push(weightsIndex);
 
           let biasIndex;
@@ -318,6 +328,19 @@ export class MathBackendWebML implements KernelBackend {
         this.addScalarInt32(strideHeightIndex, convInfo.strideHeight);
         inputs.push(strideHeightIndex);
 
+        if (opCode === this.nn.DEPTHWISE_CONV_2D) {
+          const multiplierIndex = operandIndex++;
+          this.addScalarInt32(multiplierIndex, 1);
+          inputs.push(multiplierIndex);
+        } else if (opCode === this.nn.AVERAGE_POOL_2D) {
+          const filterWidthIndex = operandIndex++;
+          this.addScalarInt32(filterWidthIndex, convInfo.filterWidth);
+          inputs.push(filterWidthIndex);
+          const filterHeightIndex = operandIndex++;
+          this.addScalarInt32(filterHeightIndex, convInfo.filterHeight);
+          inputs.push(filterHeightIndex);
+        }
+
         let fuseIndex;
         let fuseCode = this.nn.FUSED_NONE;
         if (this.operations[i+1].op === 'clip') {
@@ -326,7 +349,7 @@ export class MathBackendWebML implements KernelBackend {
           if (op.attrs.max === 1) {
             fuseCode = this.nn.FUSED_RELU1;
           } else if (op.attrs.max === 6) {
-            fuseCode = this.nn.FUSED_RELU1;
+            fuseCode = this.nn.FUSED_RELU6;
           } else {
             fuseCode = this.nn.FUSED_RELU;
           }
@@ -387,6 +410,7 @@ export class MathBackendWebML implements KernelBackend {
 
       if (opCode) {
         console.log(`add operation code: ${opCode}, inputs: [${inputs}], outputs: [${outputs}]`);
+        this.model.addOperation(opCode, inputs, outputs);
       }
     }
 
@@ -402,6 +426,24 @@ export class MathBackendWebML implements KernelBackend {
     this.graphCompiled = true;
     this.compiledOps = this.operations;
     this.operations = [];
+  }
+
+  async executeGraph() {
+    if (!this.graphCompiled) {
+      console.log('no compiled graph')
+      return;
+    }
+    console.log('execute graph starts');
+    // TODO: trace the inputs and outputs
+    const inputData = this.data.get(this.compiledOps[0].inputs[0]);
+    this.execution.setInput(0, inputData);
+    const outputData = this.data.get(this.compiledOps[this.compiledOps.length-1].outputs[0]);
+    this.execution.setOutput(0, outputData);
+    const error = await this.execution.startCompute();
+    if (error) {
+      throw new Error(error);
+    }
+    console.log('execute graph ends');
   }
 
   traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]) {
@@ -420,6 +462,8 @@ export class MathBackendWebML implements KernelBackend {
         this.compiledOps = [];
       } else {
         // console.log(`op ${op} hit cache ${this.opIndex}`);
+        this.compiledOps[this.opIndex].inputs = inputs;
+        this.compiledOps[this.opIndex].outputs = outputs;
       }
     }
     this.opIndex++;
@@ -824,7 +868,7 @@ export class MathBackendWebML implements KernelBackend {
 
   reshape<T extends Tensor<types.Rank>, R extends types.Rank>(
       x: T, shape: types.ShapeMap[R]): Tensor<R> {
-    const y = backend_util.reshapeTensor(x, shape);
+    const y = Tensor.make(shape, {}, x.dtype);
     // console.log(`op: reshape, inputs: [${x.id}], outputs: [${y.id}], attrs: ${shape}`);
     this.traceOp('reshape', shape, [x.dataId], [y.dataId]);
     return y;

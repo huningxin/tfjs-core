@@ -181,7 +181,7 @@ export class MathBackendWebML implements KernelBackend {
       return;
     }
     console.log('compile graph starts');
-    this.model = await this.nn.createModel({ useWebGL2: false });
+    this.model = await this.nn.createModel({ useWebGL2: true });
     let operands = new WeakMap<DataId, number>();
     let graphInputs = new Set<number>();
     let graphOutputs = new Set<number>();

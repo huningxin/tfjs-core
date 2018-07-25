@@ -74,6 +74,8 @@ import {UnaryOpProgram} from './webgl/unaryop_gpu';
 import {WebGLQuery} from './webgl/webgl_types';
 import * as webgl_util from './webgl/webgl_util';
 
+let webml = require('webml-polyfill');
+
 type TimerNode = RecursiveArray<Promise<number>>|Promise<number>;
 export interface CPUTimerQuery {
   startMs: number;
@@ -83,6 +85,18 @@ export interface CPUTimerQuery {
 export interface WebGLTimingInfo extends TimingInfo {
   uploadWaitMs: number;
   downloadWaitMs: number;
+}
+
+class DataInfo {
+  shape: number[];
+  dtype: DataType;
+}
+
+class Operation {
+  op: string;
+  attrs: any;
+  inputs: DataId[];
+  outputs: DataId[];
 }
 
 export class MathBackendWebGL implements KernelBackend {
@@ -96,6 +110,340 @@ export class MathBackendWebGL implements KernelBackend {
   // Accumulated time spent (including blocking in downloading data from webgl.
   private downloadWaitMs = 0;
 
+  private useWebML = true;
+  private dataInfo = new WeakMap<DataId, DataInfo>();
+  private operations: Operation[];
+  private compiledOps: Operation[];
+  private opIndex: number;
+  private graphCompiled: boolean;
+  private nn: any;
+  private model: any;
+  private compilation: any;
+  private execution: any;
+
+  addScalarInt32(operandIndex: number, value: number) {
+    const scalarInt32Type = { type: this.nn.INT32 };
+    this.model.addOperand(scalarInt32Type);
+    this.model.setOperandValue(operandIndex, new Int32Array([value]));
+  }
+
+  addScalarFloat32(operandIndex: number, value: number) {
+    const scalarInt32Type = { type: this.nn.FLOAT32 };
+    this.model.addOperand(scalarInt32Type);
+    this.model.setOperandValue(operandIndex, new Float32Array([value]));
+  }
+
+  async compileGraph() {
+    // reset the op tracing.
+    this.opIndex = 0;
+
+    // compiled or nothing to compile
+    if (this.graphCompiled || this.operations.length === 0) {
+      return;
+    }
+    console.log('compile graph starts');
+    this.model = await this.nn.createModel({ useWebGL2: true });
+    let operands = new WeakMap<DataId, number>();
+    let graphInputs = new Set<number>();
+    let graphOutputs = new Set<number>();
+    let operandIndex = 0;
+    for (let i = 0; i < this.operations.length; ++i) {
+      let op = this.operations[i];
+      let opCode;
+      let inputs: number[] = [];
+      let outputs: number[] = [];
+      console.log(op);
+      if (op.op === 'reshape' && this.operations[i+1].op !== 'max') {
+        opCode = this.nn.RESHAPE;
+        const x = op.inputs[0];
+        let xIndex = operands.get(x);
+        if (!xIndex) {
+          xIndex = operandIndex++;
+          const xInfo = this.dataInfo.get(x);
+          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
+          operands.set(x, xIndex);
+          graphInputs.add(xIndex);
+        }
+        graphOutputs.delete(xIndex);
+        inputs.push(xIndex);
+
+        const shape = op.attrs;
+        const shapeIndex = operandIndex++;
+        console.log(`add operand id: ${shapeIndex}, shape: [${shape.length}], dtype: int32`);
+        console.log(`set operand value id: ${shapeIndex}, value: [${shape}]`);
+        this.model.addOperand({ type: this.nn.TENSOR_INT32, dimensions: [shape.length] });
+        this.model.setOperandValue(shapeIndex, new Int32Array(shape));
+        inputs.push(shapeIndex);
+
+        const y = op.outputs[0];
+        const yIndex = operandIndex++;
+        const yInfo = this.dataInfo.get(y);
+        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
+        operands.set(y, yIndex);
+        graphOutputs.add(yIndex);
+        outputs.push(yIndex);
+      } else if (op.op === 'conv2d' || op.op === 'depthwiseConv2D' || op.op === 'avgpool') {
+        switch (op.op) {
+          case 'conv2d': {
+            opCode = this.nn.CONV_2D;
+          } break;
+          case 'depthwiseConv2D': {
+            opCode = this.nn.DEPTHWISE_CONV_2D;
+          } break;
+          case 'avgpool': {
+            opCode = this.nn.AVERAGE_POOL_2D;
+          } break;
+        }
+        const x = op.inputs[0];
+        let xIndex = operands.get(x);
+        if (!xIndex) {
+          xIndex = operandIndex++;
+          const xInfo = this.dataInfo.get(x);
+          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
+          operands.set(x, xIndex);
+          graphInputs.add(xIndex);
+        }
+        graphOutputs.delete(xIndex);
+        inputs.push(xIndex);
+
+        const convInfo: Conv2DInfo = op.attrs;
+        if (op.op === 'conv2d' || op.op === 'depthwiseConv2D') {
+          const weights = op.inputs[1];
+          const weightsIndex = operandIndex++;
+          const weightsInfo = this.dataInfo.get(weights);
+          const weightsData = this.texData.get(weights).values;
+          // hack on weigths shape from [h, w, in, out] to [out, h, w, in]
+          const [height, width, inChannel, outChannel] = weightsInfo.shape;
+          const length = inChannel * height * width * outChannel;
+          const transposedWeights = new Float32Array(length);
+          for (let h = 0; h < height; ++h) {
+            for (let w = 0; w < width; ++w) {
+              for (let i = 0; i < inChannel; ++i) {
+                for (let o = 0; o < outChannel; ++o) {
+                  transposedWeights[o * height * width * inChannel + h * width * inChannel + w * inChannel + i] =
+                    weightsData[h * width * inChannel * outChannel + w * inChannel * outChannel + i * outChannel + o];
+                }
+              }
+            }
+          }
+          const transposedShape = [outChannel, height, width, inChannel];
+          console.log(`add operand id: ${weightsIndex}, shape: [${transposedShape}], dtype: ${weightsInfo.dtype}`);
+          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: transposedShape });
+          console.log(`set operand value id: ${weightsIndex}, value length: ${this.texData.get(weights).values.length}`);
+          this.model.setOperandValue(weightsIndex, transposedWeights);
+          inputs.push(weightsIndex);
+
+          let biasIndex;
+          if (this.operations[i+1].op === 'add') {
+            // handle bias
+            op = this.operations[++i];
+            const bias = op.inputs[1];
+            biasIndex = operandIndex++;
+            const biasInfo = this.dataInfo.get(bias);
+            console.log(`add operand id: ${biasIndex}, shape: [${biasInfo.shape}], dtype: ${biasInfo.dtype}`);
+            this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: biasInfo.shape });
+            console.log(`set operand value id: ${biasIndex}, value length: ${this.texData.get(bias).values.length}`);
+            this.model.setOperandValue(biasIndex, this.texData.get(bias).values);
+            inputs.push(biasIndex);
+          } else {
+            console.warn(`handle zero bias`);
+          }
+        }
+
+        const paddingLeftIndex = operandIndex++;
+        console.log(`add operand id: ${paddingLeftIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${paddingLeftIndex}, value: ${convInfo.padInfo.left}`);
+        this.addScalarInt32(paddingLeftIndex, convInfo.padInfo.left);
+        inputs.push(paddingLeftIndex);
+
+        const paddingRightIndex = operandIndex++;
+        console.log(`add operand id: ${paddingRightIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${paddingRightIndex}, value: ${convInfo.padInfo.right}`);
+        this.addScalarInt32(paddingRightIndex, convInfo.padInfo.right);
+        inputs.push(paddingRightIndex);
+
+        const paddingTopIndex = operandIndex++;
+        console.log(`add operand id: ${paddingTopIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${paddingTopIndex}, value: ${convInfo.padInfo.top}`);
+        this.addScalarInt32(paddingTopIndex, convInfo.padInfo.top);
+        inputs.push(paddingTopIndex);
+
+        const paddingBottomIndex = operandIndex++;
+        console.log(`add operand id: ${paddingBottomIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${paddingBottomIndex}, value: ${convInfo.padInfo.bottom}`);
+        this.addScalarInt32(paddingBottomIndex, convInfo.padInfo.bottom);
+        inputs.push(paddingBottomIndex);
+
+        const strideWidthIndex = operandIndex++;
+        console.log(`add operand id: ${strideWidthIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${strideWidthIndex}, value: ${convInfo.strideWidth}`);
+        this.addScalarInt32(strideWidthIndex, convInfo.strideWidth);
+        inputs.push(strideWidthIndex);
+
+        const strideHeightIndex = operandIndex++;
+        console.log(`add operand id: ${strideHeightIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${strideHeightIndex}, value: ${convInfo.strideHeight}`);
+        this.addScalarInt32(strideHeightIndex, convInfo.strideHeight);
+        inputs.push(strideHeightIndex);
+
+        if (opCode === this.nn.DEPTHWISE_CONV_2D) {
+          const multiplierIndex = operandIndex++;
+          this.addScalarInt32(multiplierIndex, 1);
+          inputs.push(multiplierIndex);
+        } else if (opCode === this.nn.AVERAGE_POOL_2D) {
+          const filterWidthIndex = operandIndex++;
+          this.addScalarInt32(filterWidthIndex, convInfo.filterWidth);
+          inputs.push(filterWidthIndex);
+          const filterHeightIndex = operandIndex++;
+          this.addScalarInt32(filterHeightIndex, convInfo.filterHeight);
+          inputs.push(filterHeightIndex);
+        }
+
+        let fuseIndex;
+        let fuseCode = this.nn.FUSED_NONE;
+        if (this.operations[i+1].op === 'clip') {
+          // handle relu fusion
+          op = this.operations[++i];
+          if (op.attrs.max === 1) {
+            fuseCode = this.nn.FUSED_RELU1;
+          } else if (op.attrs.max === 6) {
+            fuseCode = this.nn.FUSED_RELU6;
+          } else {
+            fuseCode = this.nn.FUSED_RELU;
+          }
+        }
+        fuseIndex = operandIndex++;
+        console.log(`add operand id: ${fuseIndex}, shape: [1], dtype: int32`);
+        console.log(`set operand value id: ${fuseIndex}, value: ${fuseCode}`);
+        this.addScalarInt32(fuseIndex, fuseCode);
+        inputs.push(fuseIndex);
+
+        const y = op.outputs[0];
+        const yIndex = operandIndex++;
+        const yInfo = this.dataInfo.get(y);
+        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
+        operands.set(y, yIndex);
+        graphOutputs.add(yIndex);
+        outputs.push(yIndex);
+      } else if (op.op === 'reshape' &&
+          this.operations[i+1].op === 'max' &&
+          this.operations[i+2].op === 'max' &&
+          this.operations[i+3].op === 'reshape' &&
+          this.operations[i+4].op === 'reshape' &&
+          this.operations[i+5].op === 'substract' &&
+          this.operations[i+6].op === 'exp' &&
+          this.operations[i+7].op === 'reshape' &&
+          this.operations[i+8].op === 'sum' &&
+          this.operations[i+9].op === 'sum' &&
+          this.operations[i+10].op === 'reshape' &&
+          this.operations[i+11].op === 'log' &&
+          this.operations[i+12].op === 'reshape' &&
+          this.operations[i+13].op === 'add' &&
+          this.operations[i+14].op === 'reshape' &&
+          this.operations[i+15].op === 'substract' &&
+          this.operations[i+16].op === 'exp') {
+        opCode = this.nn.SOFTMAX;
+        const x = op.inputs[0];
+        let xIndex = operands.get(x);
+        if (!xIndex) {
+          xIndex = operandIndex++;
+          const xInfo = this.dataInfo.get(x);
+          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
+          operands.set(x, xIndex);
+          graphInputs.add(xIndex);
+        }
+        graphOutputs.delete(xIndex);
+        inputs.push(xIndex);
+
+        const betaIndex = operandIndex++;
+        console.log(`add operand id: ${betaIndex}, shape: [1], dtype: float32`);
+        console.log(`set operand value id: ${betaIndex}, value: ${1.0}`);
+        this.addScalarFloat32(betaIndex, 1.0);
+        inputs.push(betaIndex);
+
+        i = i + 16;
+        this.operations[i++];
+
+        const y = op.outputs[0];
+        const yIndex = operandIndex++;
+        const yInfo = this.dataInfo.get(y);
+        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
+        operands.set(y, yIndex);
+        graphOutputs.add(yIndex);
+        outputs.push(yIndex);
+      } else {
+        console.warn(`unsupported op ${op.op}`);
+      }
+
+      if (opCode) {
+        console.log(`add operation code: ${opCode}, inputs: [${inputs}], outputs: [${outputs}]`);
+        this.model.addOperation(opCode, inputs, outputs);
+      }
+    }
+
+    console.log(`graph inputs: [${Array.from(graphInputs)}], outputs: [${Array.from(graphOutputs)}]`);
+    this.model.identifyInputsAndOutputs(Array.from(graphInputs), Array.from(graphOutputs));
+    await this.model.finish();
+    this.compilation = await this.model.createCompilation();
+    this.compilation.setPreference(this.nn.PREFER_FAST_SINGLE_ANSWER);
+    await this.compilation.finish();
+    this.execution = await this.compilation.createExecution();
+    console.log(this.execution);
+    console.log(`compile graph ends`);
+    this.graphCompiled = true;
+    this.compiledOps = this.operations;
+    this.operations = [];
+  }
+
+  async executeGraph() {
+    return;
+
+    // if (!this.graphCompiled) {
+    //   console.log('no compiled graph')
+    //   return;
+    // }
+    // console.log('execute graph starts');
+    // // TODO: trace the inputs and outputs
+    // const inputData = this.texData.get(this.compiledOps[0].inputs[0]).values;
+    // this.execution.setInput(0, inputData);
+    // const outputData = this.texData.get(this.compiledOps[this.compiledOps.length-1].outputs[0]).values;
+    // this.execution.setOutput(0, outputData);
+    // const error = await this.execution.startCompute();
+    // if (error) {
+    //   throw new Error(error);
+    // }
+    // console.log('execute graph ends');
+  }
+
+  traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]) {
+    if (!this.graphCompiled) {
+      this.operations.push({
+        op: op,
+        attrs: attrs,
+        inputs: inputs,
+        outputs: outputs
+      });
+      console.log(`[${this.operations.length}] op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
+    } else {
+      if (this.compiledOps[this.opIndex].op !== op) {
+        console.warn(`graph changes ${this.compiledOps[this.opIndex].op} !== ${op}`);
+        this.graphCompiled = false;
+        this.compiledOps = [];
+      } else {
+        console.log(`op ${op} hit cache ${this.opIndex}`);
+        this.compiledOps[this.opIndex].inputs = inputs;
+        this.compiledOps[this.opIndex].outputs = outputs;
+      }
+    }
+    this.opIndex++;
+  }
+
   register(dataId: DataId, shape: number[], dtype: DataType): void {
     if (this.texData.has(dataId)) {
       throw new Error('Data buffer is already registered');
@@ -108,6 +456,7 @@ export class MathBackendWebGL implements KernelBackend {
       texShape: null,
       texType: TextureType.FLOAT
     });
+    this.dataInfo.set(dataId, {shape: shape, dtype: dtype});
   }
   fromPixels(
       pixels: ImageData|HTMLImageElement|HTMLCanvasElement|HTMLVideoElement,
@@ -144,6 +493,7 @@ export class MathBackendWebGL implements KernelBackend {
     return res as Tensor3D;
   }
   write(dataId: DataId, values: TypedArray): void {
+    console.log(`write ${dataId} ${values.length}`);
     if (values == null) {
       throw new Error('MathBackendWebGL.write(): values can not be null');
     }
@@ -164,6 +514,7 @@ export class MathBackendWebGL implements KernelBackend {
     }
   }
   readSync(dataId: DataId): TypedArray {
+    console.log(`readSync ${dataId}`);
     this.throwIfNoData(dataId);
     const texData = this.texData.get(dataId);
     const {texture, values, texShape} = texData;
@@ -185,6 +536,15 @@ export class MathBackendWebGL implements KernelBackend {
     return texData.values;
   }
   async read(dataId: DataId): Promise<TypedArray> {
+    console.log(`read ${dataId}`);
+    if (this.useWebML) {
+      await this.compileGraph();
+      const data = this.readSync(dataId);
+      await this.executeGraph();
+      console.log(data);
+      return data;
+    }
+
     this.throwIfNoData(dataId);
     const texData = this.texData.get(dataId);
     const {texture, values, texShape} = texData;
@@ -192,6 +552,7 @@ export class MathBackendWebGL implements KernelBackend {
       this.cacheOnCPU(dataId);
       return values;
     }
+
     if (ENV.get('WEBGL_GET_BUFFER_SUB_DATA_ASYNC_EXTENSION_ENABLED')) {
       const float32Values = await this.gpgpu.downloadMatrixFromTextureAsync(
           texture, texShape[0], texShape[1]);
@@ -314,6 +675,13 @@ export class MathBackendWebGL implements KernelBackend {
     }
 
     this.textureManager = new TextureManager(this.gpgpu);
+
+    this.operations = [];
+    this.opIndex = 0;
+    this.graphCompiled = false;
+    console.log(webml);
+    this.nn = (navigator as any).ml.getNeuralNetworkContext();
+    console.log(this.nn);
   }
 
   getGPGPUContext(): GPGPUContext {
@@ -434,6 +802,7 @@ export class MathBackendWebGL implements KernelBackend {
     const program = new ReduceProgram(reduceInfo, reduceType);
     const [rows, cols] = program.outputShape;
     const output = this.makeOutputArray<Tensor2D>([rows, cols], dtype);
+    this.traceOp(reduceType, null, [x.dataId], [output.dataId]);
     this.compileAndRun(program, [x], output);
     // No need to run another GPGPU program.
     if (output.shape[1] === 1) {
@@ -642,6 +1011,7 @@ export class MathBackendWebGL implements KernelBackend {
     const output =
         this.makeOutputArray(
             program.outputShape, types.upcastType(a.dtype, b.dtype)) as Tensor;
+    this.traceOp('add', null, [a.dataId, b.dataId], [output.dataId]);
     return this.compileAndRun<Tensor, Tensor>(program, [a, b], output);
   }
 
@@ -650,6 +1020,7 @@ export class MathBackendWebGL implements KernelBackend {
     const output =
         this.makeOutputArray(
             program.outputShape, types.upcastType(a.dtype, b.dtype)) as Tensor;
+    this.traceOp('substract', null, [a.dataId, b.dataId], [output.dataId]);
     return this.compileAndRun<Tensor, Tensor>(program, [a, b], output);
   }
 
@@ -683,6 +1054,8 @@ export class MathBackendWebGL implements KernelBackend {
 
   exp<T extends Tensor>(x: T): T {
     const program = new UnaryOpProgram(x.shape, unary_op.EXP);
+    const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
+    this.traceOp('exp', null, [x.dataId], [output.dataId]);
     return this.compileAndRun(program, [x]) as T;
   }
 
@@ -693,6 +1066,8 @@ export class MathBackendWebGL implements KernelBackend {
 
   log<T extends Tensor>(x: T): T {
     const program = new UnaryOpProgram(x.shape, unary_op.LOG);
+    const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
+    this.traceOp('log', null, [x.dataId], [output.dataId]);
     return this.compileAndRun(program, [x]) as T;
   }
 
@@ -750,7 +1125,9 @@ export class MathBackendWebGL implements KernelBackend {
 
   clip<T extends Tensor>(x: T, min: number, max: number): T {
     const program = new ClipProgram(x.shape, min, max);
-    return this.compileAndRun(program, [x]) as T;
+    const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
+    this.traceOp('clip', {min: min, max: max}, [x.dataId], [output.dataId]);
+    return this.compileAndRun(program, [x], output) as T;
   }
 
   abs<T extends Tensor>(x: T): T {
@@ -845,7 +1222,9 @@ export class MathBackendWebGL implements KernelBackend {
 
   conv2d(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     const program = new Conv2DProgram(convInfo);
-    return this.compileAndRun(program, [x, filter]);
+    const output = this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
+    this.traceOp('conv2d', convInfo, [x.dataId, filter.dataId], [output.dataId]);
+    return this.compileAndRun(program, [x, filter], output);
   }
 
   conv2dDerInput(dy: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
@@ -862,19 +1241,23 @@ export class MathBackendWebGL implements KernelBackend {
   depthwiseConv2D(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo):
       Tensor4D {
     const program = new DepthwiseConv2DProgram(convInfo);
-    return this.compileAndRun(program, [x, filter]);
+    const output = this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
+    this.traceOp('depthwiseConv2D', convInfo, [x.dataId, filter.dataId], [output.dataId]);
+    return this.compileAndRun(program, [x, filter], output);
   }
 
   maxPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     const program = new Pool2DProgram(convInfo, 'max', false);
     const output =
         this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
+    this.traceOp('maxpool', convInfo, [x.dataId], [output.dataId]);
     return this.compileAndRun(program, [x], output);
   }
 
   avgPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     const program = new Pool2DProgram(convInfo, 'avg', false);
     const output = this.makeOutputArray(program.outputShape, 'float32');
+    this.traceOp('avgpool', convInfo, [x.dataId], [output.dataId]);
     return this.compileAndRun(program, [x], output) as Tensor4D;
   }
 
@@ -908,7 +1291,9 @@ export class MathBackendWebGL implements KernelBackend {
 
   reshape<T extends Tensor<types.Rank>, R extends types.Rank>(
       x: T, shape: types.ShapeMap[R]): Tensor<R> {
-    return backend_util.reshapeTensor(x, shape);
+    const output = backend_util.reshapeTensor(x, shape);
+    this.traceOp('reshape', shape, [x.dataId], [output.dataId]);
+    return output;
   }
 
   resizeBilinear(
@@ -1056,7 +1441,7 @@ export class MathBackendWebGL implements KernelBackend {
           // TODO(smilkov): Propagate the original typed array to gpgpu.
           texShape[1], typedArrayToFloat32(values, dtype));
       // Once uploaded, don't store the values on cpu.
-      texData.values = null;
+      // texData.values = null;
       if (shouldTimeProgram) {
         this.uploadWaitMs += performance.now() - start;
       }

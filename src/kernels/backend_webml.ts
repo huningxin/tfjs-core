@@ -448,20 +448,20 @@ export class MathBackendWebML implements KernelBackend {
 
   traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]) {
     if (!this.graphCompiled) {
-      //console.log(`op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
       this.operations.push({
         op: op,
         attrs: attrs,
         inputs: inputs,
         outputs: outputs
       });
+      console.log(`[${this.operations.length}] op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
     } else {
       if (this.compiledOps[this.opIndex].op !== op) {
         console.warn(`graph changes ${this.compiledOps[this.opIndex].op} !== ${op}`);
         this.graphCompiled = false;
         this.compiledOps = [];
       } else {
-        // console.log(`op ${op} hit cache ${this.opIndex}`);
+        console.log(`op ${op} hit cache ${this.opIndex}`);
         this.compiledOps[this.opIndex].inputs = inputs;
         this.compiledOps[this.opIndex].outputs = outputs;
       }

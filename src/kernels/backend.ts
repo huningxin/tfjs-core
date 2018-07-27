@@ -46,6 +46,7 @@ export interface BackendTimer {
  * methods).
  */
 export interface KernelBackend extends TensorStorage, BackendTimer {
+  setEnableWebML(enabled: boolean): void;
   matMul(a: Tensor2D, b: Tensor2D, transposeA: boolean, transposeB: boolean):
       Tensor2D;
 

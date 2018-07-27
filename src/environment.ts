@@ -233,6 +233,10 @@ export class Environment {
     ENV.initBackend(backendType, safeMode);
   }
 
+  static setEnabledWebML(enabled = false) {
+    ENV.engine.setEnabledWebML(enabled);
+  }
+
   /**
    * Returns the current backend (cpu, webgl, etc). The backend is responsible
    * for creating tensors and executing operations on those tensors.

@@ -40,6 +40,7 @@ export class MathBackendCPU implements KernelBackend {
   private data = new WeakMap<DataId, DataTypeMap[DataType]>();
   private canvas: HTMLCanvasElement;
 
+  setEnableWebML(enabled: boolean): void {}
   constructor() {
     if (typeof document !== 'undefined') {
       this.canvas = document.createElement('canvas');

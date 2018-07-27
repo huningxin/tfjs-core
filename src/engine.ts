@@ -90,6 +90,10 @@ export class Engine implements TensorManager {
     this.profiler = new Profiler(backend);
   }
 
+  setEnabledWebML(enabled = false): void {
+    this.backend.setEnableWebML(enabled);
+  }
+
   runKernel<T extends Tensor, I extends NamedTensorMap>(
       forwardFunc: ForwardFunc<T>,
       inputs: I,

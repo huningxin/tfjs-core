@@ -64,6 +64,8 @@ export class MathBackendWebML implements KernelBackend {
   private compilation: any;
   private execution: any;
 
+  setEnableWebML(enabled: boolean): void {}
+
   constructor() {
     if (typeof document !== 'undefined') {
       this.canvas = document.createElement('canvas');

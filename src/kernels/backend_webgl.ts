@@ -110,7 +110,7 @@ export class MathBackendWebGL implements KernelBackend {
   // Accumulated time spent (including blocking in downloading data from webgl.
   private downloadWaitMs = 0;
 
-  private useWebML = true;
+  private useWebML = false;
   private dataInfo = new WeakMap<DataId, DataInfo>();
   private operations: Operation[];
   private compiledOps: Operation[];
@@ -121,6 +121,9 @@ export class MathBackendWebGL implements KernelBackend {
   private compilation: any;
   private execution: any;
 
+  setEnableWebML(enabled: boolean): void {
+    this.useWebML = enabled;
+  }
   addScalarInt32(operandIndex: number, value: number) {
     const scalarInt32Type = { type: this.nn.INT32 };
     this.model.addOperand(scalarInt32Type);
@@ -152,7 +155,7 @@ export class MathBackendWebGL implements KernelBackend {
       let opCode;
       let inputs: number[] = [];
       let outputs: number[] = [];
-      console.log(op);
+      // console.log(op);
       if (op.op === 'reshape' && this.operations[i+1].op !== 'max') {
         opCode = this.nn.RESHAPE;
         const x = op.inputs[0];
@@ -160,7 +163,7 @@ export class MathBackendWebGL implements KernelBackend {
         if (!xIndex) {
           xIndex = operandIndex++;
           const xInfo = this.dataInfo.get(x);
-          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          // console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
           this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
           operands.set(x, xIndex);
           graphInputs.add(xIndex);
@@ -170,8 +173,8 @@ export class MathBackendWebGL implements KernelBackend {
 
         const shape = op.attrs;
         const shapeIndex = operandIndex++;
-        console.log(`add operand id: ${shapeIndex}, shape: [${shape.length}], dtype: int32`);
-        console.log(`set operand value id: ${shapeIndex}, value: [${shape}]`);
+        // console.log(`add operand id: ${shapeIndex}, shape: [${shape.length}], dtype: int32`);
+        // console.log(`set operand value id: ${shapeIndex}, value: [${shape}]`);
         this.model.addOperand({ type: this.nn.TENSOR_INT32, dimensions: [shape.length] });
         this.model.setOperandValue(shapeIndex, new Int32Array(shape));
         inputs.push(shapeIndex);
@@ -179,11 +182,12 @@ export class MathBackendWebGL implements KernelBackend {
         const y = op.outputs[0];
         const yIndex = operandIndex++;
         const yInfo = this.dataInfo.get(y);
-        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        // console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
         this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
         operands.set(y, yIndex);
         graphOutputs.add(yIndex);
         outputs.push(yIndex);
+        this.compiledOps.push(op);
       } else if (op.op === 'conv2d' || op.op === 'depthwiseConv2D' || op.op === 'avgpool') {
         switch (op.op) {
           case 'conv2d': {
@@ -196,12 +200,13 @@ export class MathBackendWebGL implements KernelBackend {
             opCode = this.nn.AVERAGE_POOL_2D;
           } break;
         }
+        this.compiledOps.push(op);
         const x = op.inputs[0];
         let xIndex = operands.get(x);
         if (!xIndex) {
           xIndex = operandIndex++;
           const xInfo = this.dataInfo.get(x);
-          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          // console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
           this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
           operands.set(x, xIndex);
           graphInputs.add(xIndex);
@@ -230,9 +235,9 @@ export class MathBackendWebGL implements KernelBackend {
             }
           }
           const transposedShape = [outChannel, height, width, inChannel];
-          console.log(`add operand id: ${weightsIndex}, shape: [${transposedShape}], dtype: ${weightsInfo.dtype}`);
+          // console.log(`add operand id: ${weightsIndex}, shape: [${transposedShape}], dtype: ${weightsInfo.dtype}`);
           this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: transposedShape });
-          console.log(`set operand value id: ${weightsIndex}, value length: ${this.texData.get(weights).values.length}`);
+          // console.log(`set operand value id: ${weightsIndex}, value length: ${this.texData.get(weights).values.length}`);
           this.model.setOperandValue(weightsIndex, transposedWeights);
           inputs.push(weightsIndex);
 
@@ -240,12 +245,13 @@ export class MathBackendWebGL implements KernelBackend {
           if (this.operations[i+1].op === 'add') {
             // handle bias
             op = this.operations[++i];
+            this.compiledOps.push(op);
             const bias = op.inputs[1];
             biasIndex = operandIndex++;
             const biasInfo = this.dataInfo.get(bias);
-            console.log(`add operand id: ${biasIndex}, shape: [${biasInfo.shape}], dtype: ${biasInfo.dtype}`);
+            // console.log(`add operand id: ${biasIndex}, shape: [${biasInfo.shape}], dtype: ${biasInfo.dtype}`);
             this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: biasInfo.shape });
-            console.log(`set operand value id: ${biasIndex}, value length: ${this.texData.get(bias).values.length}`);
+            // console.log(`set operand value id: ${biasIndex}, value length: ${this.texData.get(bias).values.length}`);
             this.model.setOperandValue(biasIndex, this.texData.get(bias).values);
             inputs.push(biasIndex);
           } else {
@@ -254,38 +260,38 @@ export class MathBackendWebGL implements KernelBackend {
         }
 
         const paddingLeftIndex = operandIndex++;
-        console.log(`add operand id: ${paddingLeftIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${paddingLeftIndex}, value: ${convInfo.padInfo.left}`);
+        // console.log(`add operand id: ${paddingLeftIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${paddingLeftIndex}, value: ${convInfo.padInfo.left}`);
         this.addScalarInt32(paddingLeftIndex, convInfo.padInfo.left);
         inputs.push(paddingLeftIndex);
 
         const paddingRightIndex = operandIndex++;
-        console.log(`add operand id: ${paddingRightIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${paddingRightIndex}, value: ${convInfo.padInfo.right}`);
+        // console.log(`add operand id: ${paddingRightIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${paddingRightIndex}, value: ${convInfo.padInfo.right}`);
         this.addScalarInt32(paddingRightIndex, convInfo.padInfo.right);
         inputs.push(paddingRightIndex);
 
         const paddingTopIndex = operandIndex++;
-        console.log(`add operand id: ${paddingTopIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${paddingTopIndex}, value: ${convInfo.padInfo.top}`);
+        // console.log(`add operand id: ${paddingTopIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${paddingTopIndex}, value: ${convInfo.padInfo.top}`);
         this.addScalarInt32(paddingTopIndex, convInfo.padInfo.top);
         inputs.push(paddingTopIndex);
 
         const paddingBottomIndex = operandIndex++;
-        console.log(`add operand id: ${paddingBottomIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${paddingBottomIndex}, value: ${convInfo.padInfo.bottom}`);
+        // console.log(`add operand id: ${paddingBottomIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${paddingBottomIndex}, value: ${convInfo.padInfo.bottom}`);
         this.addScalarInt32(paddingBottomIndex, convInfo.padInfo.bottom);
         inputs.push(paddingBottomIndex);
 
         const strideWidthIndex = operandIndex++;
-        console.log(`add operand id: ${strideWidthIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${strideWidthIndex}, value: ${convInfo.strideWidth}`);
+        // console.log(`add operand id: ${strideWidthIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${strideWidthIndex}, value: ${convInfo.strideWidth}`);
         this.addScalarInt32(strideWidthIndex, convInfo.strideWidth);
         inputs.push(strideWidthIndex);
 
         const strideHeightIndex = operandIndex++;
-        console.log(`add operand id: ${strideHeightIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${strideHeightIndex}, value: ${convInfo.strideHeight}`);
+        // console.log(`add operand id: ${strideHeightIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${strideHeightIndex}, value: ${convInfo.strideHeight}`);
         this.addScalarInt32(strideHeightIndex, convInfo.strideHeight);
         inputs.push(strideHeightIndex);
 
@@ -307,6 +313,7 @@ export class MathBackendWebGL implements KernelBackend {
         if (this.operations[i+1].op === 'clip') {
           // handle relu fusion
           op = this.operations[++i];
+          this.compiledOps.push(op);
           if (op.attrs.max === 1) {
             fuseCode = this.nn.FUSED_RELU1;
           } else if (op.attrs.max === 6) {
@@ -316,15 +323,15 @@ export class MathBackendWebGL implements KernelBackend {
           }
         }
         fuseIndex = operandIndex++;
-        console.log(`add operand id: ${fuseIndex}, shape: [1], dtype: int32`);
-        console.log(`set operand value id: ${fuseIndex}, value: ${fuseCode}`);
+        // console.log(`add operand id: ${fuseIndex}, shape: [1], dtype: int32`);
+        // console.log(`set operand value id: ${fuseIndex}, value: ${fuseCode}`);
         this.addScalarInt32(fuseIndex, fuseCode);
         inputs.push(fuseIndex);
 
         const y = op.outputs[0];
         const yIndex = operandIndex++;
         const yInfo = this.dataInfo.get(y);
-        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        // console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
         this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
         operands.set(y, yIndex);
         graphOutputs.add(yIndex);
@@ -352,7 +359,7 @@ export class MathBackendWebGL implements KernelBackend {
         if (!xIndex) {
           xIndex = operandIndex++;
           const xInfo = this.dataInfo.get(x);
-          console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
+          // console.log(`add operand id: ${xIndex}, shape: [${xInfo.shape}], dtype: ${xInfo.dtype}`);
           this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: xInfo.shape });
           operands.set(x, xIndex);
           graphInputs.add(xIndex);
@@ -361,24 +368,26 @@ export class MathBackendWebGL implements KernelBackend {
         inputs.push(xIndex);
 
         const betaIndex = operandIndex++;
-        console.log(`add operand id: ${betaIndex}, shape: [1], dtype: float32`);
-        console.log(`set operand value id: ${betaIndex}, value: ${1.0}`);
+        // console.log(`add operand id: ${betaIndex}, shape: [1], dtype: float32`);
+        // console.log(`set operand value id: ${betaIndex}, value: ${1.0}`);
         this.addScalarFloat32(betaIndex, 1.0);
         inputs.push(betaIndex);
 
-        i = i + 16;
-        this.operations[i++];
-
-        const y = op.outputs[0];
+        const y = this.operations[i+16].outputs[0];
         const yIndex = operandIndex++;
         const yInfo = this.dataInfo.get(y);
-        console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
+        // console.log(`add operand id: ${yIndex}, shape: [${yInfo.shape}], dtype: ${yInfo.dtype}`);
         this.model.addOperand({ type: this.nn.TENSOR_FLOAT32, dimensions: yInfo.shape });
         operands.set(y, yIndex);
         graphOutputs.add(yIndex);
         outputs.push(yIndex);
+        for (let j = i; j < i + 17; j++) {
+          this.compiledOps.push(this.operations[j]);
+        }
+        i = i + 16;
       } else {
         console.warn(`unsupported op ${op.op}`);
+        continue;
       }
 
       if (opCode) {
@@ -397,31 +406,38 @@ export class MathBackendWebGL implements KernelBackend {
     console.log(this.execution);
     console.log(`compile graph ends`);
     this.graphCompiled = true;
-    this.compiledOps = this.operations;
     this.operations = [];
   }
 
   async executeGraph() {
-    return;
-
-    // if (!this.graphCompiled) {
-    //   console.log('no compiled graph')
-    //   return;
-    // }
-    // console.log('execute graph starts');
-    // // TODO: trace the inputs and outputs
-    // const inputData = this.texData.get(this.compiledOps[0].inputs[0]).values;
-    // this.execution.setInput(0, inputData);
-    // const outputData = this.texData.get(this.compiledOps[this.compiledOps.length-1].outputs[0]).values;
-    // this.execution.setOutput(0, outputData);
-    // const error = await this.execution.startCompute();
-    // if (error) {
-    //   throw new Error(error);
-    // }
-    // console.log('execute graph ends');
+    if (!this.graphCompiled) {
+      console.log('no compiled graph')
+      return;
+    }
+    console.log('execute graph starts');
+    // TODO: trace the inputs and outputs
+    const inputData = this.readSync(this.compiledOps[0].inputs[0]);
+    this.execution.setInput(0, inputData);
+    const outputDataId = this.compiledOps[this.compiledOps.length-1].outputs[0];
+    if (this.texData.get(outputDataId).values === null) {
+      const size = util.sizeFromShape(this.texData.get(outputDataId).shape);
+      const values = util.getTypedArrayFromDType(this.texData.get(outputDataId).dtype, size);
+      // console.log(`getTypedArrayFromDType ${size} ${dataInfo.dtype}`);
+      this.texData.get(outputDataId).values = values;
+    }
+    const outputData = this.texData.get(outputDataId).values;
+    this.execution.setOutput(0, outputData);
+    const error = await this.execution.startCompute();
+    if (error) {
+      throw new Error(error);
+    }
+    console.log('execute graph ends');
   }
 
-  traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]) {
+  traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]): boolean {
+    if (!this.useWebML) {
+      return false;
+    }
     if (!this.graphCompiled) {
       this.operations.push({
         op: op,
@@ -430,21 +446,28 @@ export class MathBackendWebGL implements KernelBackend {
         outputs: outputs
       });
       console.log(`[${this.operations.length}] op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
+      return false;
     } else {
+      if (op === 'substract' && this.opIndex === 0)
+        return false;
+
       if (this.compiledOps[this.opIndex].op !== op) {
         console.warn(`graph changes ${this.compiledOps[this.opIndex].op} !== ${op}`);
         this.graphCompiled = false;
         this.compiledOps = [];
+        return false;
       } else {
         console.log(`op ${op} hit cache ${this.opIndex}`);
         this.compiledOps[this.opIndex].inputs = inputs;
         this.compiledOps[this.opIndex].outputs = outputs;
+        this.opIndex++;
+        return true;
       }
     }
-    this.opIndex++;
   }
 
   register(dataId: DataId, shape: number[], dtype: DataType): void {
+    // console.log(`register ${dataId} ${shape} ${dtype}`);
     if (this.texData.has(dataId)) {
       throw new Error('Data buffer is already registered');
     }
@@ -514,7 +537,7 @@ export class MathBackendWebGL implements KernelBackend {
     }
   }
   readSync(dataId: DataId): TypedArray {
-    console.log(`readSync ${dataId}`);
+    // console.log(`readSync ${dataId}`);
     this.throwIfNoData(dataId);
     const texData = this.texData.get(dataId);
     const {texture, values, texShape} = texData;
@@ -536,12 +559,12 @@ export class MathBackendWebGL implements KernelBackend {
     return texData.values;
   }
   async read(dataId: DataId): Promise<TypedArray> {
-    console.log(`read ${dataId}`);
+    // console.log(`read ${dataId}`);
     if (this.useWebML) {
       await this.compileGraph();
-      const data = this.readSync(dataId);
       await this.executeGraph();
-      console.log(data);
+      const data = this.texData.get(dataId).values;
+      // console.log(data);
       return data;
     }
 
@@ -677,11 +700,12 @@ export class MathBackendWebGL implements KernelBackend {
     this.textureManager = new TextureManager(this.gpgpu);
 
     this.operations = [];
+    this.compiledOps = [];
     this.opIndex = 0;
     this.graphCompiled = false;
     console.log(webml);
     this.nn = (navigator as any).ml.getNeuralNetworkContext();
-    console.log(this.nn);
+    // console.log(this.nn);
   }
 
   getGPGPUContext(): GPGPUContext {
@@ -802,7 +826,12 @@ export class MathBackendWebGL implements KernelBackend {
     const program = new ReduceProgram(reduceInfo, reduceType);
     const [rows, cols] = program.outputShape;
     const output = this.makeOutputArray<Tensor2D>([rows, cols], dtype);
-    this.traceOp(reduceType, null, [x.dataId], [output.dataId]);
+    if (this.traceOp(reduceType, null, [x.dataId], [output.dataId])) {
+      if (output.shape[1] === 1) {
+        return output;
+      }
+      return this.reduce(output, reduceType, dtype);
+    }
     this.compileAndRun(program, [x], output);
     // No need to run another GPGPU program.
     if (output.shape[1] === 1) {
@@ -1011,7 +1040,8 @@ export class MathBackendWebGL implements KernelBackend {
     const output =
         this.makeOutputArray(
             program.outputShape, types.upcastType(a.dtype, b.dtype)) as Tensor;
-    this.traceOp('add', null, [a.dataId, b.dataId], [output.dataId]);
+    if (this.traceOp('add', null, [a.dataId, b.dataId], [output.dataId]))
+          return output;
     return this.compileAndRun<Tensor, Tensor>(program, [a, b], output);
   }
 
@@ -1020,7 +1050,8 @@ export class MathBackendWebGL implements KernelBackend {
     const output =
         this.makeOutputArray(
             program.outputShape, types.upcastType(a.dtype, b.dtype)) as Tensor;
-    this.traceOp('substract', null, [a.dataId, b.dataId], [output.dataId]);
+    if (this.traceOp('substract', null, [a.dataId, b.dataId], [output.dataId]))
+          return output;
     return this.compileAndRun<Tensor, Tensor>(program, [a, b], output);
   }
 
@@ -1055,8 +1086,9 @@ export class MathBackendWebGL implements KernelBackend {
   exp<T extends Tensor>(x: T): T {
     const program = new UnaryOpProgram(x.shape, unary_op.EXP);
     const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
-    this.traceOp('exp', null, [x.dataId], [output.dataId]);
-    return this.compileAndRun(program, [x]) as T;
+    if (this.traceOp('exp', null, [x.dataId], [output.dataId]))
+      return output as T;
+    return this.compileAndRun(program, [x], output) as T;
   }
 
   expm1<T extends Tensor>(x: T): T {
@@ -1067,8 +1099,9 @@ export class MathBackendWebGL implements KernelBackend {
   log<T extends Tensor>(x: T): T {
     const program = new UnaryOpProgram(x.shape, unary_op.LOG);
     const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
-    this.traceOp('log', null, [x.dataId], [output.dataId]);
-    return this.compileAndRun(program, [x]) as T;
+    if (this.traceOp('log', null, [x.dataId], [output.dataId]))
+      return output as T;
+    return this.compileAndRun(program, [x], output) as T;
   }
 
   log1p<T extends Tensor>(x: T): T {
@@ -1126,7 +1159,8 @@ export class MathBackendWebGL implements KernelBackend {
   clip<T extends Tensor>(x: T, min: number, max: number): T {
     const program = new ClipProgram(x.shape, min, max);
     const output = this.makeOutputArray(program.outputShape, x.dtype) as T;
-    this.traceOp('clip', {min: min, max: max}, [x.dataId], [output.dataId]);
+    if (this.traceOp('clip', {min: min, max: max}, [x.dataId], [output.dataId]))
+      return output as T;
     return this.compileAndRun(program, [x], output) as T;
   }
 
@@ -1223,7 +1257,8 @@ export class MathBackendWebGL implements KernelBackend {
   conv2d(x: Tensor4D, filter: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     const program = new Conv2DProgram(convInfo);
     const output = this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
-    this.traceOp('conv2d', convInfo, [x.dataId, filter.dataId], [output.dataId]);
+    if (this.traceOp('conv2d', convInfo, [x.dataId, filter.dataId], [output.dataId]))
+      return output;
     return this.compileAndRun(program, [x, filter], output);
   }
 
@@ -1242,7 +1277,8 @@ export class MathBackendWebGL implements KernelBackend {
       Tensor4D {
     const program = new DepthwiseConv2DProgram(convInfo);
     const output = this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
-    this.traceOp('depthwiseConv2D', convInfo, [x.dataId, filter.dataId], [output.dataId]);
+    if (this.traceOp('depthwiseConv2D', convInfo, [x.dataId, filter.dataId], [output.dataId]))
+        return output;
     return this.compileAndRun(program, [x, filter], output);
   }
 
@@ -1250,14 +1286,14 @@ export class MathBackendWebGL implements KernelBackend {
     const program = new Pool2DProgram(convInfo, 'max', false);
     const output =
         this.makeOutputArray(program.outputShape, x.dtype) as Tensor4D;
-    this.traceOp('maxpool', convInfo, [x.dataId], [output.dataId]);
     return this.compileAndRun(program, [x], output);
   }
 
   avgPool(x: Tensor4D, convInfo: Conv2DInfo): Tensor4D {
     const program = new Pool2DProgram(convInfo, 'avg', false);
     const output = this.makeOutputArray(program.outputShape, 'float32');
-    this.traceOp('avgpool', convInfo, [x.dataId], [output.dataId]);
+    if (this.traceOp('avgpool', convInfo, [x.dataId], [output.dataId]))
+      return output as Tensor4D;
     return this.compileAndRun(program, [x], output) as Tensor4D;
   }
 
@@ -1292,7 +1328,8 @@ export class MathBackendWebGL implements KernelBackend {
   reshape<T extends Tensor<types.Rank>, R extends types.Rank>(
       x: T, shape: types.ShapeMap[R]): Tensor<R> {
     const output = backend_util.reshapeTensor(x, shape);
-    this.traceOp('reshape', shape, [x.dataId], [output.dataId]);
+    if (this.traceOp('reshape', shape, [x.dataId], [output.dataId]))
+        return output;
     return output;
   }
 

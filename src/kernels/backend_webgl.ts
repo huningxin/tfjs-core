@@ -391,30 +391,30 @@ export class MathBackendWebGL implements KernelBackend {
       }
 
       if (opCode) {
-        console.log(`add operation code: ${opCode}, inputs: [${inputs}], outputs: [${outputs}]`);
+        // console.log(`add operation code: ${opCode}, inputs: [${inputs}], outputs: [${outputs}]`);
         this.model.addOperation(opCode, inputs, outputs);
       }
     }
 
-    console.log(`graph inputs: [${Array.from(graphInputs)}], outputs: [${Array.from(graphOutputs)}]`);
+    // console.log(`graph inputs: [${Array.from(graphInputs)}], outputs: [${Array.from(graphOutputs)}]`);
     this.model.identifyInputsAndOutputs(Array.from(graphInputs), Array.from(graphOutputs));
     await this.model.finish();
     this.compilation = await this.model.createCompilation();
     this.compilation.setPreference(this.nn.PREFER_FAST_SINGLE_ANSWER);
     await this.compilation.finish();
     this.execution = await this.compilation.createExecution();
-    console.log(this.execution);
-    console.log(`compile graph ends`);
+    // console.log(this.execution);
+    // console.log(`compile graph ends`);
     this.graphCompiled = true;
     this.operations = [];
   }
 
   async executeGraph() {
     if (!this.graphCompiled) {
-      console.log('no compiled graph')
+      // console.log('no compiled graph')
       return;
     }
-    console.log('execute graph starts');
+    // console.log('execute graph starts');
     // TODO: trace the inputs and outputs
     const inputData = this.readSync(this.compiledOps[0].inputs[0]);
     this.execution.setInput(0, inputData);
@@ -431,7 +431,7 @@ export class MathBackendWebGL implements KernelBackend {
     if (error) {
       throw new Error(error);
     }
-    console.log('execute graph ends');
+    // console.log('execute graph ends');
   }
 
   traceOp(op: string, attrs: any, inputs: DataId[], outputs: DataId[]): boolean {
@@ -445,7 +445,7 @@ export class MathBackendWebGL implements KernelBackend {
         inputs: inputs,
         outputs: outputs
       });
-      console.log(`[${this.operations.length}] op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
+      // console.log(`[${this.operations.length}] op: ${op}, attrs: ${attrs}, inputs: [${inputs}], outputs: [${outputs}]`);
       return false;
     } else {
       if (op === 'substract' && this.opIndex === 0)
@@ -457,7 +457,7 @@ export class MathBackendWebGL implements KernelBackend {
         this.compiledOps = [];
         return false;
       } else {
-        console.log(`op ${op} hit cache ${this.opIndex}`);
+        // console.log(`op ${op} hit cache ${this.opIndex}`);
         this.compiledOps[this.opIndex].inputs = inputs;
         this.compiledOps[this.opIndex].outputs = outputs;
         this.opIndex++;
@@ -516,7 +516,7 @@ export class MathBackendWebGL implements KernelBackend {
     return res as Tensor3D;
   }
   write(dataId: DataId, values: TypedArray): void {
-    console.log(`write ${dataId} ${values.length}`);
+    // console.log(`write ${dataId} ${values.length}`);
     if (values == null) {
       throw new Error('MathBackendWebGL.write(): values can not be null');
     }

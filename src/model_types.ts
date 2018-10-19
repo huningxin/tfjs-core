@@ -64,7 +64,7 @@ export interface InferenceModel {
    * be returned for model with multiple outputs.
    */
   predict(inputs: Tensor|Tensor[]|NamedTensorMap, config: ModelPredictConfig):
-      Tensor|Tensor[]|NamedTensorMap;
+      Promise<Tensor|Tensor[]|NamedTensorMap>;
 
   /**
    * Single Execute the inference for the input tensors and return activation
@@ -84,5 +84,5 @@ export interface InferenceModel {
    * outputs.
    */
   execute(inputs: Tensor|Tensor[]|NamedTensorMap, outputs: string|string[]):
-      Tensor|Tensor[];
+      Promise<Tensor|Tensor[]>;
 }
